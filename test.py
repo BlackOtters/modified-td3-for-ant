@@ -78,5 +78,5 @@ def test_td3(model_path, env_id="Ant-v4", episodes=5, render=True):
         print(f"{'='*50}")
 
 if __name__ == "__main__":
-    test_td3("runs/Ant-v4__td3_continuous_action__1__1761308129/td3_continuous_action.cleanrl_model", 
-             episodes=3, render=True)
+    test_td3("runs/your model path", 
+             episodes=3, render=True)#for example runs/Ant-v4__arg_def__1__1761308129/arg_def.cleanrl_model
