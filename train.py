@@ -16,7 +16,7 @@ from make_env import create_envs
 from net import create_networks
 from make_env import AntCurriculum
 
-class EnhancedReplayBuffer(Dataset):
+class EnhancedReplayBuffer(Dataset):#Dataset便于后续加入dataloader功能
     def __init__(self, buffer_size, observation_space, action_space, device, 
                  prioritized=True, n_step=1, alpha=0.6, beta=0.4):
         self.buffer_size = buffer_size
@@ -29,34 +29,34 @@ class EnhancedReplayBuffer(Dataset):
         self.beta = beta
         
         # 核心存储
-        self.observations = torch.zeros((buffer_size, *self.obs_shape), 
+        self.observations = torch.zeros((buffer_size, *self.obs_shape), #预分配内存
                                       dtype=torch.float32, device=device)
-        self.next_observations = torch.zeros_like(self.observations)
+        self.next_observations = torch.zeros_like(self.observations)#通过复刻快速预分配内存
         self.actions = torch.zeros((buffer_size, *self.act_shape), 
                                  device=device)
         self.rewards = torch.zeros(buffer_size, device=device)
         self.dones = torch.zeros(buffer_size, dtype=torch.bool, device=device)
         
         # 优先级采样
-        self.priorities = torch.ones(buffer_size, device=device) * 1e-6
-        self.max_priority = 1.0
+        self.priorities = torch.ones(buffer_size, device=device) * 1e-6#预分配内存，初始优先级很小
+        self.max_priority = 1.0 #一开始设置最大优先级为1，后面最大优先级会越来越大
         
         # 轨迹管理
-        self.trajectories = deque(maxlen=1000)
+        self.trajectories = deque(maxlen=1000)#最大保存1000条完整轨迹
         self.current_traj = {
-            'obs': [], 'actions': [], 'rewards': [], 'dones': []
-        }
+            'obs': [], 'actions': [], 'rewards': [], 'dones': []#轨迹格式
+        }#预存小于1000的轨迹
         
-        self.pos = 0
-        self.size = 0
+        self.pos = 0 #环形区中当前存储位置
+        self.size = 0 #表示当前有效缓冲区数据长度
 
     def __len__(self):
         return self.size
 
     def add(self, obs, next_obs, action, reward, done, info=None):
-        idx = self.pos % self.buffer_size
+        idx = self.pos % self.buffer_size#环形缓冲，超过buffer_size自动循环覆盖旧数据
         
-        # 转换为Tensor
+        # 将其他类型转换为Tensor
         self.observations[idx] = torch.as_tensor(obs, device=self.device)
         self.next_observations[idx] = torch.as_tensor(next_obs, device=self.device)
         self.actions[idx] = torch.as_tensor(action, device=self.device)
@@ -65,9 +65,9 @@ class EnhancedReplayBuffer(Dataset):
         
         # 初始优先级
         if self.prioritized:
-            self.priorities[idx] = self.max_priority
+            self.priorities[idx] = self.max_priority#初始时暂且设为最大优先级
             
-        # 轨迹管理
+        # 更新轨迹
         self._update_trajectory(obs, action, reward, done, info)
         
         self.pos += 1
@@ -80,22 +80,22 @@ class EnhancedReplayBuffer(Dataset):
         self.current_traj['rewards'].append(reward)
         self.current_traj['dones'].append(done)
         
-        if done or len(self.current_traj['obs']) >= 1000:  # 防止内存泄漏
+        if done or len(self.current_traj['obs']) >= 1000:  
             self.trajectories.append(self.current_traj)
             self.current_traj = {'obs': [], 'actions': [], 'rewards': [], 'dones': []}
 
-    def sample(self, batch_size, beta=None):
+    def sample(self, batch_size, beta=None):#选择优先采样或随机采样
         if self.prioritized:
             return self._priority_sample(batch_size, beta or self.beta)
         return self._random_sample(batch_size)
 
     def _priority_sample(self, batch_size, beta):
         # 计算采样概率
-        probs = self.priorities[:self.size] ** self.alpha
+        probs = self.priorities[:self.size] ** self.alpha#用alpha控制优先程度
         probs /= probs.sum()
         
-        # 重要性采样
-        indices = torch.multinomial(probs, batch_size, replacement=True)
+        # 重要性采样,补偿优先采样带来的偏差，beta=1时完全抵消偏差
+        indices = torch.multinomial(probs, batch_size, replacement=True)#采用多项式按probs抽样batch_size=256个样本，indice是随机序号
         weights = (self.size * probs[indices]) ** (-beta)
         weights /= weights.max()
         
@@ -106,17 +106,17 @@ class EnhancedReplayBuffer(Dataset):
         indices = torch.randint(0, self.size, (batch_size,))
         return self._get_batch(indices)
 
-    def _get_batch(self, indices):
-        # 基础batch
+    def _get_batch(self, indices):#根据随机序号获得相应的一批样本
         batch = {
             'observations': self.observations[indices],
             'actions': self.actions[indices],
             'rewards': self.rewards[indices],
             'next_observations': self.next_observations[indices],
-            'dones': self.dones[indices]
+            'dones': self.dones[indices],
+            'indices': indices
         }
         
-        # 计算n-step回报
+        # 额外计算n-step多步回报，有利于平衡方差与偏差
         if self.n_step > 1:
             batch = self._compute_n_step_returns(batch, indices)
             
@@ -134,7 +134,7 @@ class EnhancedReplayBuffer(Dataset):
             
             # 计算折扣回报
             reward = 0
-            for j in range(idx, end_idx):
+            for j in range(idx, end_idx):#从第idx步计算到第end_idx步
                 reward += (gamma ** (j - idx)) * self.rewards[j]
                 if self.dones[j]:
                     break
@@ -144,18 +144,21 @@ class EnhancedReplayBuffer(Dataset):
             next_obs[i] = self.next_observations[min(idx + self.n_step, self.size - 1)]
             
         return {
-            **batch,
+            **batch,#将原bacth解包
             'rewards': n_step_rewards,
             'next_observations': next_obs,
             'dones': n_step_dones
         }
 
-    def update_priorities(self, indices, priorities):
+    def update_priorities(self, indices, losses, clip_range=(1e-6,1e6)):
         """更新优先级"""
-        if self.prioritized:
-            priorities = priorities.squeeze() + 1e-6  # 防止归零
-            self.priorities[indices] = priorities
-            self.max_priority = max(self.max_priority, priorities.max())
+        losses = torch.sqrt(losses + 1e-6) #TD误差是损失函数的根号，TD误差越大对经验越感兴趣，优先级越大
+        losses=losses.squeeze().cpu().numpy()
+        priorities = np.abs(losses) + 1e-6
+        priorities = np.clip(priorities, *clip_range)
+        self.priorities[indices] = priorities
+        self.max_priority = max(self.max_priority,priorities.max())
+
 
 
 
@@ -216,7 +219,7 @@ if __name__ == "__main__":
         n_step=3
     )#创建经验回放缓冲区
 
-    # 在训练循环开始前初始化
+    # 在训练循环开始前初始化课程实例
     curriculum = AntCurriculum(args.total_timesteps)
 
     start_time = time.time()#记录训练开始时刻
@@ -224,7 +227,7 @@ if __name__ == "__main__":
     # TRY NOT TO MODIFY: start the game
     obs, _ = envs.reset(seed=args.seed)#环境重置初始化
     for global_step in range(args.total_timesteps):#进入训练循环
-        curriculum.update(envs, global_step)
+        curriculum.update(envs, global_step)#每一步更新课程，从而对环境参数和奖励进行修改
         # ALGO LOGIC: put action logic here
         if global_step < args.learning_starts:#动作选取：正式训练开始前进行随机探索
             actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
@@ -232,7 +235,7 @@ if __name__ == "__main__":
             with torch.no_grad():#禁止梯度跟踪
                 actions = actor(torch.Tensor(obs).to(device))#从策略网络获得动作
                 actions += torch.normal(0, actor.action_scale * args.exploration_noise)#添加探索噪声
-                #截断超出正常范围的动作，断开计算图并转为numpy
+                #截断超出正常范围的动作，并转为numpy
                 actions = actions.cpu().numpy().clip(envs.single_action_space.low, envs.single_action_space.high)
      
 
@@ -260,8 +263,8 @@ if __name__ == "__main__":
 
         # ALGO LOGIC: training.#进入网络更新
         if global_step > args.learning_starts:
-            beta = min(1.0, args.beta_init + global_step/args.total_timesteps)
-            data = buffer.sample(args.batch_size, beta=beta)#经验回放
+            beta = min(1.0, args.beta_init + global_step/args.total_timesteps)#beta越大方差越大，前半段容忍beta小于1带来的一定的偏差，后半段beta=1
+            data = buffer.sample(args.batch_size, beta=beta)#经验回放,cleanrl创建的data是对象，这里自定义经验回放创建，batch是字典，用data[""]调用数据
             with torch.no_grad():
                 clipped_noise = (torch.randn_like(data["actions"], device=device) * args.policy_noise).clamp(
                     -args.noise_clip, args.noise_clip
@@ -280,6 +283,10 @@ if __name__ == "__main__":
             qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
             qf2_loss = F.mse_loss(qf2_a_values, next_q_value)
             qf_loss = qf1_loss + qf2_loss#两个价值网络共用一个优化器，所以将两个损失函数合并来优化
+
+            if buffer.prioritized:
+                buffer.update_priorities(data["indices"], qf_loss)
+
 
             # optimize the model
             q_optimizer.zero_grad()#清除历史梯度
