@@ -57,62 +57,60 @@ class AntFeatureExtractor(nn.Module):
     def __init__(self, obs_dim=27):
         super().__init__()
         # 分模态处理Ant的27维观测
-        self.torso_net = nn.Sequential(
+        self.torso_net = nn.Sequential(#输入前7维，输出32维
             nn.Linear(7, 32),  # 躯干位置+旋转(7D)
             nn.LayerNorm(32),
             nn.GELU()
         )
-        self.joint_net = nn.Sequential(
+        self.joint_net = nn.Sequential(#输入中间16维，输出64维
             nn.Linear(16, 64),  # 关节角度+速度(8+8=16D)
             nn.LayerNorm(64),
             nn.GELU()
         )
-        self.contact_net = nn.Sequential(
+        self.contact_net = nn.Sequential(#输入后4维，输出16维
             nn.Linear(4, 16),   # 接触力(4D)
             nn.SiLU()
         )
         # 融合层（输出256维与原有网络兼容）
         self.fusion = nn.Sequential(
             nn.Linear(32+64+16, 256),
-            nn.LayerNorm(256),
+            nn.LayerNorm(256),#用层归一化处理序列数据
             nn.ReLU()
         )
 
     def forward(self, x):
-        torso = x[..., :7]
+        torso = x[..., :7]#无论前面有多少维，只对最后一个维度进行切片
         joints = x[..., 7:23]
         contacts = x[..., 23:]
         return self.fusion(torch.cat([
             self.torso_net(torso),
             self.joint_net(joints),
             self.contact_net(contacts)
-        ], dim=-1))
+        ], dim=-1))#输出256维度
 
 class EnhancedActor(Actor):
     def __init__(self, observation_space, action_space):
         super().__init__(observation_space, action_space)
-        # 替换原第一层为特征提取器
-        self.feature_extractor = AntFeatureExtractor(observation_space.shape[0])
-        # 保持原有输出层结构不变
-        self.fc1 = nn.Linear(256, 256)  # 与特征提取器输出维度匹配
+        # 加入特征提取器
+        self.feature_extractor = AntFeatureExtractor(observation_space.shape[0])#shape[0]表示最外层维度大小
+        self.fc1 = nn.Linear(256, 256)  # 将fc1原本的输入维度由obs_dim替换为256，与特征提取器输出维度匹配
         
     def forward(self, x):
-        features = self.feature_extractor(x)
+        features = self.feature_extractor(x)#使用特征提取器，输出256个维度
         return super().forward(features)  # 复用父类的动作缩放逻辑
 
 class EnhancedQNetwork(QNetwork):
     def __init__(self, observation_space, action_space):
         super().__init__(observation_space, action_space)
         self.feature_extractor = AntFeatureExtractor(observation_space.shape[0])
-        # 修改输入层结构但保持接口
-        self.fc1 = nn.Linear(256 + action_space.shape[0], 256)
+        self.fc1 = nn.Linear(256 + action_space.shape[0], 256)#同样对fc1进行修改
         
     def forward(self, x, a):
-        features = self.feature_extractor(x)
+        features = self.feature_extractor(x)#先使用特征提取器
         return super().forward(features, a)  # 复用父类的Q值计算
 
 def create_networks(observation_space, action_space, device):
-    """完全兼容原有调用方式"""
+    """完全兼容原有net.py调用方式"""
     actor = EnhancedActor(observation_space, action_space).to(device)
     qf1 = EnhancedQNetwork(observation_space, action_space).to(device)
     qf2 = EnhancedQNetwork(observation_space, action_space).to(device)
@@ -122,7 +120,7 @@ def create_networks(observation_space, action_space, device):
     qf1_target = EnhancedQNetwork(observation_space, action_space).to(device)
     qf2_target = EnhancedQNetwork(observation_space, action_space).to(device)
     
-    target_actor.load_state_dict(actor.state_dict())
+    target_actor.load_state_dict(actor.state_dict())#同步初始化参数
     qf1_target.load_state_dict(qf1.state_dict())
     qf2_target.load_state_dict(qf2.state_dict())
     

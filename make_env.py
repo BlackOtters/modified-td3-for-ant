@@ -7,11 +7,11 @@ import numpy as np
 args = get_args()
 
 class AntCurriculum:
-    def __init__(self, total_steps=1e6):
-        self.phases = [
-            {"name": "balance", "steps": 0.3*total_steps, "params": {"gravity": -9.8, "motor_strength": 0.5}},
-            {"name": "move", "steps": 0.6*total_steps, "params": {"gravity": -12.0, "motor_strength": 0.8}},
-            {"name": "efficient", "steps": total_steps, "params": {"gravity": -15.0, "motor_strength": 1.0}}
+    def __init__(self, total_steps=1e6):#默认学习十万步数
+        self.phases = [#平衡阶段重力小电机弱，移动阶段重力正常电机偏弱，高效阶段重力偏大电机全力，电机<1避免超限
+            {"name": "balance", "steps": 0.3*total_steps, "params": {"gravity": -7.8, "motor_strength": 0.5}},
+            {"name": "move", "steps": 0.6*total_steps, "params": {"gravity": -9.8, "motor_strength": 0.7}},
+            {"name": "efficient", "steps": total_steps, "params": {"gravity": -11.8, "motor_strength": 1.0}}
         ]
         self.current_phase = 0
         self.current_step = 0
@@ -23,33 +23,33 @@ class AntCurriculum:
         # 遍历所有并行环境
         for env in envs.envs:  # SyncVectorEnv的子环境列表
             mujoco_env = env.env  # 获取底层MuJoCo环境
-            mujoco_env.model.opt.gravity[2] = phase["params"]["gravity"]
+            mujoco_env.model.opt.gravity[2] = phase["params"]["gravity"]#修改重力参数
             
             # 修改关节力矩
             for j in mujoco_env.model.actuator_actrange:
-                j[:] = phase["params"]["motor_strength"]
+                j[:] = phase["params"]["motor_strength"]#修改电机属性
         
         
 
-    def _get_current_phase(self):
+    def _get_current_phase(self):#根据步数获取所在阶段
         for i, phase in enumerate(self.phases):
             if self.current_step <= phase["steps"]:
                 return phase
         return self.phases[-1]
 
-class CurriculumRewardWrapper(Wrapper):
+class CurriculumRewardWrapper(Wrapper):#奖励包装器
     def __init__(self, env, curriculum):
         super().__init__(env)
         
         self.curriculum = curriculum
         self._rng = np.random.RandomState()  # 本地随机数生成器
 
-    def seed(self, seed=None):
+    def seed(self, seed=None):#将环境包装后，第98行需要seed方法，所以另外加一个seed函数
         # 同时设置环境和包装器的随机种子
         seeds = []
-        if hasattr(self.env, 'seed'):
+        if hasattr(self.env, 'seed'):#检查环境是否有seed方法，有的话返回True,直接收集种子
             seeds += self.env.seed(seed)
-        self._rng.seed(seed)
+        self._rng.seed(seed)#初始化包装器内部的随机数生成器，确保包装器层面的随机操作也确定可复现
         seeds.append(seed)
         return seeds
 
@@ -60,18 +60,18 @@ class CurriculumRewardWrapper(Wrapper):
         
         # 根据阶段调整奖励权重
         phase = self.curriculum._get_current_phase()
-        if phase["name"] == "balance":
+        if phase["name"] == "balance":#在平衡阶段加入平衡奖励
             reward = 0.7 * self._balance_reward(obs) + 0.3 * reward
-        elif phase["name"] == "move":
+        elif phase["name"] == "move":#在移动阶段加入x方向前进速度奖励
             reward = 0.5 * reward + 0.5 * self._velocity_reward(obs)
-        else:
+        else:#在高效阶段加入能耗奖励
             reward = 0.3 * reward + 0.7 * self._energy_efficiency(obs, action)
             
         return obs, reward, done, trunc, info
     
     def _balance_reward(self, obs):
         # 躯干直立奖励（基于俯仰角）
-        pitch = obs[3]  # 四元数中的俯仰分量
+        pitch = obs[4]  # 四元数中的x分量,无旋转时x=0,倒立时x=1
         return 1.0 - abs(pitch) 
     
     def _velocity_reward(self, obs):
@@ -80,7 +80,7 @@ class CurriculumRewardWrapper(Wrapper):
         
     def _energy_efficiency(self, obs, action):
         # 能量效率奖励
-        power = torch.sum(torch.abs(action * obs[15:23]))  # 动作*速度
+        power = torch.sum(torch.abs(action * obs[15:23]))  # 通过动作*速度计算能耗
         return 1.0 / (power + 1e-6)
 
 def make_env(env_id, seed, idx, capture_video, run_name):#创建单个环境
@@ -92,11 +92,11 @@ def make_env(env_id, seed, idx, capture_video, run_name):#创建单个环境
         else:
             env = gym.make(env_id)#创建原始环境
         env = gym.wrappers.RecordEpisodeStatistics(env)#通过wrapper为原始环境自动统计当前回合和累计奖励
-        curriculum = AntCurriculum(total_steps=args.total_timesteps)
-        env = CurriculumRewardWrapper(env, curriculum)
+        curriculum = AntCurriculum(total_steps=args.total_timesteps)#初始化课程实例
+        env = CurriculumRewardWrapper(env, curriculum)#用奖励包装器包装环境
     
-        env.seed(seed)
-        env.observation_space.seed(seed)
+        env.seed(seed)#设置环境的随机规则
+        env.observation_space.seed(seed)#按随机种子采样初始观测状态
         env.action_space.seed(seed) #按随机种子采样动作
         return env
 
