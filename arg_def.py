@@ -43,7 +43,7 @@ class Args:
     """策略网络更新频率（延迟更新）"""
     noise_clip: float = 0.5
     """噪声裁剪范围[-0.5,0.5]，噪声是0.2，则实际范围是[-0.1,0.1];噪声是0.1，则范围[-0.05,0.05]"""
-    beta_init: float = 0.4
+    beta_init: float = 0.5
 
 def get_args():#提供接口函数
     import tyro
